@@ -2138,7 +2138,7 @@ def politician_edit_view(request, politician_id=0, politician_we_vote_id=''):
             },
             'rating_list':                  rating_list,
             'related_campaignx_list':       related_campaignx_list,
-            'related_candidate_list':       related_candidate_list,
+            # 'related_candidate_list':       related_candidate_list,
             'related_representative_list':  related_representative_list,
             'state_code':                   state_code,
             'state_code_dict':
@@ -3544,28 +3544,28 @@ def politician_edit_process_view(request):
             'time_difference': round(time() - t0, 4),
         })
 
-    # ##################################
-    # Link Candidates to this Politician
-    t0 = time()
-    # Transaction ensures all candidate saves and position_list_manager updates are committed together
-    with transaction.atomic():
-        for candidate in related_candidate_list:
-            if positive_value_exists(candidate.id):
-                variable_name = "link_candidate_" + str(candidate.id) + "_to_politician"
-                link_candidate = positive_value_exists(request.POST.get(variable_name, False))
-                if positive_value_exists(link_candidate) and positive_value_exists(politician_we_vote_id):
-                    candidate.politician_id = politician_id
-                    candidate.politician_we_vote_id = politician_we_vote_id
-                    candidate.seo_friendly_path = politician_on_stage.seo_friendly_path
-                    if not positive_value_exists(candidate.vote_usa_politician_id) and \
-                            positive_value_exists(vote_usa_politician_id):
-                        candidate.vote_usa_politician_id = vote_usa_politician_id
-                    candidate.save()
-                    # Now update positions
-                    results = position_list_manager.update_politician_we_vote_id_in_all_positions(
-                        candidate_we_vote_id=candidate.we_vote_id,
-                        new_politician_id=politician_id,
-                        new_politician_we_vote_id=politician_we_vote_id)
+    # # ##################################
+    # # Link Candidates to this Politician
+    # t0 = time()
+    # # Transaction ensures all candidate saves and position_list_manager updates are committed together
+    # with transaction.atomic():
+    #     for candidate in related_candidate_list:
+    #         if positive_value_exists(candidate.id):
+    #             variable_name = "link_candidate_" + str(candidate.id) + "_to_politician"
+    #             link_candidate = positive_value_exists(request.POST.get(variable_name, False))
+    #             if positive_value_exists(link_candidate) and positive_value_exists(politician_we_vote_id):
+    #                 candidate.politician_id = politician_id
+    #                 candidate.politician_we_vote_id = politician_we_vote_id
+    #                 candidate.seo_friendly_path = politician_on_stage.seo_friendly_path
+    #                 if not positive_value_exists(candidate.vote_usa_politician_id) and \
+    #                         positive_value_exists(vote_usa_politician_id):
+    #                     candidate.vote_usa_politician_id = vote_usa_politician_id
+    #                 candidate.save()
+    #                 # Now update positions
+    #                 results = position_list_manager.update_politician_we_vote_id_in_all_positions(
+    #                     candidate_we_vote_id=candidate.we_vote_id,
+    #                     new_politician_id=politician_id,
+    #                     new_politician_we_vote_id=politician_we_vote_id)
 
                     messages.add_message(request, messages.INFO,
                                          'Candidate linked, number of positions changed: {number_changed}'
@@ -3573,10 +3573,10 @@ def politician_edit_process_view(request):
                 else:
                     pass
 
-    performance_list.append({
-        'enum_key': 'LINK_CANDIDATES',
-        'time_difference': round(time() - t0, 4),
-    })
+    # performance_list.append({
+    #     'enum_key': 'LINK_CANDIDATES',
+    #     'time_difference': round(time() - t0, 4),
+    # })
 
     # ##################################
     # Find Representatives to Link to this Politician

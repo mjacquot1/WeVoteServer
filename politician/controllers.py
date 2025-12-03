@@ -445,7 +445,7 @@ def find_campaignx_list_to_link_to_this_politician(politician=None):
     return related_list
 
 
-def find_candidates_to_link_to_this_politician(politician=None):
+def queryset_find_candidates_to_link_to_this_politician(politician=None):
     """
     Find Candidates to Link to this Politician
     Finding Candidates that *might* be "children" of this politician
@@ -530,6 +530,7 @@ def find_candidates_to_link_to_this_politician(politician=None):
         related_candidate_list = list(queryset)
     except Exception as e:
         related_candidate_list = []
+    
     return related_candidate_list
 
 
