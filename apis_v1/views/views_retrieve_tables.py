@@ -12,7 +12,6 @@ from retrieve_tables.controllers_master import fast_load_status_retrieve, get_to
 from retrieve_tables.controllers_master import fast_load_status_update
 from wevote_functions.functions import get_voter_api_device_id
 from wevote_tokens.models.single_use_tokens import SingleUseTokenManager
-from wevote_tokens.enums import TokenUsage
 
 logger = wevote_functions.admin.get_logger(__name__)
 

@@ -1724,6 +1724,9 @@ def login_we_vote(request):
     :param request:
     :return:
     """
+    from wevote_tokens.models.single_use_tokens import SingleUseTokenManager, Scope
+    from wevote_tokens.enums import TokenHeaders, TokenTypes
+    
     voter_api_device_id = get_voter_api_device_id(request)  # We look in the cookies for voter_api_device_id
     if hasattr(request, 'facebook'):
         facebook_object = request.facebook
@@ -1746,6 +1749,12 @@ def login_we_vote(request):
     info_message = ''
     error_message = ''
     username = ''
+    return_token_info = {
+        TokenHeaders.TOKEN_STATUS.value: None,
+        TokenHeaders.TOKEN_MESSAGE.value: None,
+        TokenHeaders.TOKEN_EXPIRATION.value: None,
+        TokenHeaders.SINGLE_USE_TOKEN_ID.value: None,
+    }
 
     # Does Django think user is already signed in?
     if request.user.is_authenticated:
@@ -1797,6 +1806,35 @@ def login_we_vote(request):
                 voter_api_device_id = generate_voter_device_id()
                 results = voter_device_link_manager.save_new_voter_device_link(voter_api_device_id, user.id)
                 store_new_voter_api_device_id_in_cookie = results['voter_device_link_created']
+
+                if request.headers.get(TokenHeaders.CREATE_TOKEN.value) == 'true':                    
+                    new_token_type = request.headers.get(TokenHeaders.TOKEN_TYPE.value)
+
+                    if new_token_type == TokenTypes.SINGLE_USE.value:
+                        return_token_info[TokenHeaders.TOKEN_STATUS.value] = 'Fail'
+
+                        new_token_key = request.headers.get(TokenHeaders.SINGLE_USE_TOKEN_NEW_KEY.value)
+                        new_token_expiration = request.headers.get(TokenHeaders.TOKEN_EXPIRATION.value)
+
+                        if positive_value_exists(new_token_key) and positive_value_exists(new_token_expiration):
+                            new_token_key_bytes = new_token_key.encode('utf-8')
+                            new_token_expiration_seconds = int(new_token_expiration)
+
+                            try:
+                                new_token_info = SingleUseTokenManager.create_token(
+                                    user.id,
+                                    new_token_key_bytes,
+                                    Scope.BACKUP_ONE_TABLE_TO_S3.value,
+                                    new_token_expiration_seconds,
+                                )
+                                return_token_info[TokenHeaders.TOKEN_STATUS.value] = 'Success'
+                                return_token_info[TokenHeaders.TOKEN_MESSAGE.value] = new_token_info['status']
+                                return_token_info[TokenHeaders.SINGLE_USE_TOKEN_ID.value] = str(new_token_info['token_pk'])
+                                return_token_info[TokenHeaders.TOKEN_EXPIRATION.value] = new_token_info['expiration_datetime']
+
+                            except Exception as e:
+                                return_token_info[TokenHeaders.TOKEN_MESSAGE.value] = str(e)
+
             else:
                 error_message = "Your account is not active, please contact the site admin."
 
@@ -1805,6 +1843,7 @@ def login_we_vote(request):
                 pass
         else:
             error_message = "Your username and/or password were incorrect."
+            
     elif not positive_value_exists(voter_on_stage_id):
         # If here, delete the prior voter_api_device_id from database
         voter_device_link_manager.delete_voter_device_link(voter_api_device_id)
@@ -1822,6 +1861,9 @@ def login_we_vote(request):
 
     if positive_value_exists(error_message):
         messages.add_message(request, messages.ERROR, error_message)
+        if request.headers.get(TokenHeaders.CREATE_TOKEN.value) == 'true':   
+            return_token_info[TokenHeaders.TOKEN_STATUS.value] = 'Fail'
+            return_token_info[TokenHeaders.TOKEN_MESSAGE.value] = error_message
     if positive_value_exists(info_message):
         messages.add_message(request, messages.INFO, info_message)
 
@@ -1834,6 +1876,11 @@ def login_we_vote(request):
         'messages_on_stage':    messages_on_stage,
     }
     response = render(request, 'registration/login_we_vote.html', template_values)
+    if isinstance(return_token_info, dict):
+        for key, value in return_token_info.items():
+            if value:
+                response.set_cookie(key, value, max_age=60000, httponly=True, secure=True, samesite='lax')
+
     # If login with facebook then save facebook details in facebookAuthResponse and facebookLinkToVoter
     if facebook_data:
         facebook_user_data = getattr(facebook_data, 'user', None)
@@ -1972,10 +2019,13 @@ def statistics_summary_view(request):
 
 @login_required
 def sync_data_with_master_servers_view(request):
+    from wevote_tokens.models.single_use_tokens import SingleUseTokenManager
+    from wevote_tokens.enums import TokenHeaders, TokenTypes
+
     # admin, analytics_admin, partner_organization, political_data_manager, political_data_viewer, verified_volunteer
     authority_required = {'admin'}
-    fast_load_start_token_id = request.COOKIES.get("X-Fast-Load-Start-Token-Id", None)
-    fast_load_start_token_key = request.COOKIES.get("X-Fast-Load-Start-Token-Key", None)
+    fast_load_start_token_id = request.COOKIES.get(TokenHeaders.SYNC_DATA_WITH_MASTER_SERVERS_START_TOKEN_ID.value, None)
+    fast_load_start_token_key = request.COOKIES.get(TokenHeaders.SYNC_DATA_WITH_MASTER_SERVERS_START_TOKEN_KEY.value, None)
 
     if not voter_has_authority(request, authority_required):
         return redirect_to_sign_in_page(request, authority_required)
@@ -2022,9 +2072,10 @@ def sync_data_with_master_servers_view(request):
     if request.POST:
         input_username = request.POST.get('username').strip()
         password = request.POST.get('password')
-        
-        # host = 'http://localhost:8000'
-        host = 'https://api.wevoteusa.org'
+        validation_key_str = SingleUseTokenManager.generate_encryption_key().decode('utf-8')
+
+        host = 'http://localhost:8000'
+        # host = 'https://api.wevoteusa.org'
         auth_url = f"{host}/login_we_vote/"
 
         session = requests.Session()
@@ -2034,21 +2085,26 @@ def sync_data_with_master_servers_view(request):
         auth_data = {
             'username': input_username,  # Email address
             'password': password,
-            'create_token': 'true',
-            'X-TOKEN-TYPE': 'single_use',
-            'X-TOKEN-KEY': 'token_key',
-            'X-TOKEN-EXPIRATION': '1200',  # 20 minutes
         }
 
         headers = {
             'X-CSRFToken': csrf_token,
             'Referer': auth_url,  # Django CSRF middleware expects this
+            TokenHeaders.CREATE_TOKEN.value: 'true',
+            TokenHeaders.TOKEN_TYPE.value: TokenTypes.SINGLE_USE.value,
+            TokenHeaders.SINGLE_USE_TOKEN_NEW_KEY.value: validation_key_str,
+            TokenHeaders.TOKEN_EXPIRATION.value: '1200',  # 20 minutes
         }
 
         auth_response = session.post(auth_url, data=auth_data, headers=headers)
-        
-        response.set_cookie('X-Fast-Load-Start-Token-Id', auth_response.url, max_age=300, httponly=True, secure=True, samesite='Lax')
-        response.set_cookie('X-Fast-Load-Start-Token-Key', auth_response.url, max_age=300, httponly=True, secure=True, samesite='Lax')
-        template_values['fast_load_start_token_valid'] = True
+        auth_cookies = session.cookies.get_dict()
+
+        if TokenHeaders.TOKEN_STATUS.value in auth_cookies:
+            if auth_cookies[TokenHeaders.TOKEN_STATUS.value] == 'Success':
+                response.set_cookie(TokenHeaders.SYNC_DATA_WITH_MASTER_SERVERS_START_TOKEN_ID.value, auth_cookies[TokenHeaders.SINGLE_USE_TOKEN_ID.value], max_age=300, httponly=True, secure=True, samesite='Lax')
+                response.set_cookie(TokenHeaders.SYNC_DATA_WITH_MASTER_SERVERS_START_TOKEN_KEY.value, validation_key_str, max_age=300, httponly=True, secure=True, samesite='Lax')
+                template_values['fast_load_start_token_valid'] = True
+            else:
+                template_values['fast_load_start_token_error'] = auth_cookies[TokenHeaders.TOKEN_MESSAGE.value].strip('"')
 
     return response
