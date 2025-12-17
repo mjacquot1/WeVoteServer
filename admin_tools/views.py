@@ -1724,8 +1724,9 @@ def login_we_vote(request):
     :param request:
     :return:
     """
-    from wevote_tokens.models.single_use_tokens import SingleUseTokenManager, Scope
-    from wevote_tokens.enums import TokenHeaders, TokenTypes
+    from wevote_tokens.enums import TokenResponse, TokenHeaders, TokenTypes
+    from wevote_tokens.utils import TokensManager
+    from wevote_tokens.models.single_use_tokens import Scope
     
     voter_api_device_id = get_voter_api_device_id(request)  # We look in the cookies for voter_api_device_id
     if hasattr(request, 'facebook'):
@@ -1749,12 +1750,8 @@ def login_we_vote(request):
     info_message = ''
     error_message = ''
     username = ''
-    return_token_info = {
-        TokenHeaders.TOKEN_STATUS.value: None,
-        TokenHeaders.TOKEN_MESSAGE.value: None,
-        TokenHeaders.TOKEN_EXPIRATION.value: None,
-        TokenHeaders.SINGLE_USE_TOKEN_ID.value: None,
-    }
+    token_response = TokenResponse.TOKEN_RESPONSE.get_value()
+    request_token_info = TokensManager.get_request_token_info(request)
 
     # Does Django think user is already signed in?
     if request.user.is_authenticated:
@@ -1807,33 +1804,11 @@ def login_we_vote(request):
                 results = voter_device_link_manager.save_new_voter_device_link(voter_api_device_id, user.id)
                 store_new_voter_api_device_id_in_cookie = results['voter_device_link_created']
 
-                if request.headers.get(TokenHeaders.CREATE_TOKEN.value) == 'true':                    
-                    new_token_type = request.headers.get(TokenHeaders.TOKEN_TYPE.value)
-
-                    if new_token_type == TokenTypes.SINGLE_USE.value:
-                        return_token_info[TokenHeaders.TOKEN_STATUS.value] = 'Fail'
-
-                        new_token_key = request.headers.get(TokenHeaders.SINGLE_USE_TOKEN_NEW_KEY.value)
-                        new_token_expiration = request.headers.get(TokenHeaders.TOKEN_EXPIRATION.value)
-
-                        if positive_value_exists(new_token_key) and positive_value_exists(new_token_expiration):
-                            new_token_key_bytes = new_token_key.encode('utf-8')
-                            new_token_expiration_seconds = int(new_token_expiration)
-
-                            try:
-                                new_token_info = SingleUseTokenManager.create_token(
-                                    user.id,
-                                    new_token_key_bytes,
-                                    Scope.BACKUP_ONE_TABLE_TO_S3.value,
-                                    new_token_expiration_seconds,
-                                )
-                                return_token_info[TokenHeaders.TOKEN_STATUS.value] = 'Success'
-                                return_token_info[TokenHeaders.TOKEN_MESSAGE.value] = new_token_info['status']
-                                return_token_info[TokenHeaders.SINGLE_USE_TOKEN_ID.value] = str(new_token_info['token_pk'])
-                                return_token_info[TokenHeaders.TOKEN_EXPIRATION.value] = new_token_info['expiration_datetime']
-
-                            except Exception as e:
-                                return_token_info[TokenHeaders.TOKEN_MESSAGE.value] = str(e)
+                # ONLY FOR FAST LOAD RIGHT NOW
+                if request_token_info['create_token']:
+                    request_token_info['user_id'] = user.we_vote_id
+                    token_manager = TokensManager(token_types=[request_token_info['token_type']], scope=Scope.BACKUP_ONE_TABLE_TO_S3.value, expiration_seconds=300)
+                    token_response['token_creation'] = token_manager.token_creation(request_token_info) 
 
             else:
                 error_message = "Your account is not active, please contact the site admin."
@@ -1861,9 +1836,11 @@ def login_we_vote(request):
 
     if positive_value_exists(error_message):
         messages.add_message(request, messages.ERROR, error_message)
-        if request.headers.get(TokenHeaders.CREATE_TOKEN.value) == 'true':   
-            return_token_info[TokenHeaders.TOKEN_STATUS.value] = 'Fail'
-            return_token_info[TokenHeaders.TOKEN_MESSAGE.value] = error_message
+        if request_token_info['create_token']:
+            token_response['token_creation'] = TokenResponse.TOKEN_CREATION.get_value()
+            token_response['token_creation']['success'] = False
+            token_response['token_creation']['status'] = 'FAIL'
+            token_response['token_creation']['error_message'] = error_message
     if positive_value_exists(info_message):
         messages.add_message(request, messages.INFO, info_message)
 
@@ -1876,10 +1853,7 @@ def login_we_vote(request):
         'messages_on_stage':    messages_on_stage,
     }
     response = render(request, 'registration/login_we_vote.html', template_values)
-    if isinstance(return_token_info, dict):
-        for key, value in return_token_info.items():
-            if value:
-                response.set_cookie(key, value, max_age=60000, httponly=True, secure=True, samesite='lax')
+    response = TokensManager.add_response_token_info_headers(response, token_response)
 
     # If login with facebook then save facebook details in facebookAuthResponse and facebookLinkToVoter
     if facebook_data:
@@ -2020,12 +1994,13 @@ def statistics_summary_view(request):
 @login_required
 def sync_data_with_master_servers_view(request):
     from wevote_tokens.models.single_use_tokens import SingleUseTokenManager
-    from wevote_tokens.enums import TokenHeaders, TokenTypes
+    from wevote_tokens.enums import TokenHeaders, TokenCookies, TokenTypes
+    from wevote_tokens.utils import TokensManager
 
     # admin, analytics_admin, partner_organization, political_data_manager, political_data_viewer, verified_volunteer
     authority_required = {'admin'}
-    fast_load_start_token_id = request.COOKIES.get(TokenHeaders.SYNC_DATA_WITH_MASTER_SERVERS_START_TOKEN_ID.value, None)
-    fast_load_start_token_key = request.COOKIES.get(TokenHeaders.SYNC_DATA_WITH_MASTER_SERVERS_START_TOKEN_KEY.value, None)
+    fast_load_start_token_id = request.COOKIES.get(TokenCookies.SYNC_DATA_WITH_MASTER_SERVERS_START_TOKEN_ID.value, None)
+    fast_load_start_token_key = request.COOKIES.get(TokenCookies.SYNC_DATA_WITH_MASTER_SERVERS_START_TOKEN_KEY.value, None)
 
     if not voter_has_authority(request, authority_required):
         return redirect_to_sign_in_page(request, authority_required)
@@ -2087,24 +2062,30 @@ def sync_data_with_master_servers_view(request):
             'password': password,
         }
 
+        request_token_headers = TokensManager.format_request_headers(
+            user_id=None,
+            token_type=TokenTypes.SINGLE_USE.value,
+            authorization=None,
+            create_token=True,
+            token_key=None,
+            new_token_key=validation_key_str,
+        )
+
         headers = {
-            'X-CSRFToken': csrf_token,
+            'X-CSRFToken': csrf_token,  # Django CSRF middleware expects this
             'Referer': auth_url,  # Django CSRF middleware expects this
-            TokenHeaders.CREATE_TOKEN.value: 'true',
-            TokenHeaders.TOKEN_TYPE.value: TokenTypes.SINGLE_USE.value,
-            TokenHeaders.SINGLE_USE_TOKEN_NEW_KEY.value: validation_key_str,
-            TokenHeaders.TOKEN_EXPIRATION.value: '1200',  # 20 minutes
+            **request_token_headers,
         }
 
         auth_response = session.post(auth_url, data=auth_data, headers=headers)
-        auth_cookies = session.cookies.get_dict()
+        token_creation_info = TokensManager.convert_headers_to_dict(auth_response.headers)['token_creation']
 
-        if TokenHeaders.TOKEN_STATUS.value in auth_cookies:
-            if auth_cookies[TokenHeaders.TOKEN_STATUS.value] == 'Success':
-                response.set_cookie(TokenHeaders.SYNC_DATA_WITH_MASTER_SERVERS_START_TOKEN_ID.value, auth_cookies[TokenHeaders.SINGLE_USE_TOKEN_ID.value], max_age=300, httponly=True, secure=True, samesite='Lax')
-                response.set_cookie(TokenHeaders.SYNC_DATA_WITH_MASTER_SERVERS_START_TOKEN_KEY.value, validation_key_str, max_age=300, httponly=True, secure=True, samesite='Lax')
-                template_values['fast_load_start_token_valid'] = True
-            else:
-                template_values['fast_load_start_token_error'] = auth_cookies[TokenHeaders.TOKEN_MESSAGE.value].strip('"')
+        if token_creation_info['success']:
+            response.set_cookie(TokenCookies.SYNC_DATA_WITH_MASTER_SERVERS_START_TOKEN_ID.value, token_creation_info['token_info']['token_pk'], max_age=300, httponly=True, secure=True, samesite='Lax')
+            response.set_cookie(TokenCookies.SYNC_DATA_WITH_MASTER_SERVERS_START_TOKEN_KEY.value, validation_key_str, max_age=300, httponly=True, secure=True, samesite='Lax')
+            response.set_cookie(TokenCookies.SYNC_DATA_WITH_MASTER_SERVERS_START_USER_ID.value, token_creation_info['token_info']['user_id'], max_age=300, httponly=True, secure=True, samesite='Lax')
+            template_values['fast_load_start_token_valid'] = True
+        else:
+            template_values['fast_load_start_token_error'] = token_creation_info['error_message']
 
     return response
