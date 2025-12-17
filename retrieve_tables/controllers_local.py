@@ -79,7 +79,8 @@ def retrieve_sql_files_from_master_server(request):
             TokenHeaders.TOKEN_KEY.value: request.COOKIES.get(TokenCookies.SYNC_DATA_WITH_MASTER_SERVERS_START_TOKEN_KEY.value, None),
             TokenHeaders.TOKEN_NEW_KEY.value: SingleUseTokenManager.generate_encryption_key(),
             TokenHeaders.TOKEN_TYPE.value: TokenTypes.SINGLE_USE.value,
-        } 
+            TokenHeaders.CREATE_TOKEN.value: 'True',
+        }
 
         num_tables = len(allowable_tables)
         print(f"Fast loading {num_tables} tables")
@@ -101,10 +102,21 @@ def retrieve_sql_files_from_master_server(request):
             url = f'{host}/apis/v1/backupOneTableToS3/'
             params = {'table_name': table_name, 'voter_api_device_id': voter_api_device_id}
             response = fetch_data_from_api(url, params, token_headers, 100, 180)  # 3 min timeout for ballot_i
-            new_token_headers = TokensManager.convert_headers_to_dict(response.headers)['token_authentication']
+            response_headers = TokensManager.convert_headers_to_dict(response.headers)
+            token_authentication = response_headers['token_authentication']
+            print(f"Token authentication: {token_authentication}")
+            if token_authentication['success']:
+                token_creation = response_headers['token_creation']
+                print(f"Token creation: {token_creation}")
+                if token_creation['success']:
+                    token_headers[TokenHeaders.AUTHORIZATION.value] = f'Bearer {token_creation['token_info']['token_pk']}'
+                    token_headers[TokenHeaders.TOKEN_KEY.value] = token_headers[TokenHeaders.TOKEN_NEW_KEY.value]
+                    token_headers[TokenHeaders.TOKEN_NEW_KEY.value] = SingleUseTokenManager.generate_encryption_key()
+            else:
+                print(f"Token authentication failed: {token_authentication['error_message']}")
+                continue
             structured_json = response.json()
-            breakpoint()
-            continue # TEMPORARY
+            continue
 
             aws_s3_file_url = structured_json['aws_s3_file_url']
             print(f"{global_stats['count']} -- URL to aws file {aws_s3_file_url} "
@@ -289,15 +301,18 @@ def fetch_data_from_api(url, params, token_headers, max_retries=1000, timeout=8)
     :param max_retries:
     :return:
     """
+    # tries = 3
     for attempt in range(max_retries):
         # print(f'Attempt {attempt} of {max_retries} attempts to fetch data from api')
         try:
             response = requests.get(url, params=params, headers=token_headers, verify=True, timeout=timeout)
-            if response.status_code == 200:
-                return response
-            else:
-                logger.warning(f"\nAPI request failed with status code {response.status_code}, retrying...")
-                # add token here for retry
+            # if response.status_code == 200:
+            #     tries -= 1
+            #     if tries < 0:
+            #         return response
+            # else:
+            #     logger.warning(f"\nAPI request failed with status code {response.status_code}, retrying...")
+            return response
         except requests.Timeout:
             logger.error(f"Request timed out, retrying...\n{url} params: {params}")
         except requests.RequestException as e:

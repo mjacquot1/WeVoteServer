@@ -2081,9 +2081,9 @@ def sync_data_with_master_servers_view(request):
         token_creation_info = TokensManager.convert_headers_to_dict(auth_response.headers)['token_creation']
 
         if token_creation_info['success']:
-            response.set_cookie(TokenCookies.SYNC_DATA_WITH_MASTER_SERVERS_START_TOKEN_ID.value, token_creation_info['token_info']['token_pk'], max_age=300, httponly=True, secure=True, samesite='Lax')
-            response.set_cookie(TokenCookies.SYNC_DATA_WITH_MASTER_SERVERS_START_TOKEN_KEY.value, validation_key_str, max_age=300, httponly=True, secure=True, samesite='Lax')
-            response.set_cookie(TokenCookies.SYNC_DATA_WITH_MASTER_SERVERS_START_USER_ID.value, token_creation_info['token_info']['user_id'], max_age=300, httponly=True, secure=True, samesite='Lax')
+            response.set_cookie(TokenCookies.SYNC_DATA_WITH_MASTER_SERVERS_START_TOKEN_ID.value, token_creation_info['token_info']['token_pk'], max_age=60, httponly=True, secure=True, samesite='Lax')
+            response.set_cookie(TokenCookies.SYNC_DATA_WITH_MASTER_SERVERS_START_TOKEN_KEY.value, validation_key_str, max_age=60, httponly=True, secure=True, samesite='Lax')
+            response.set_cookie(TokenCookies.SYNC_DATA_WITH_MASTER_SERVERS_START_USER_ID.value, token_creation_info['token_info']['user_id'], max_age=60, httponly=True, secure=True, samesite='Lax')
             template_values['fast_load_start_token_valid'] = True
         else:
             template_values['fast_load_start_token_error'] = token_creation_info['error_message']
