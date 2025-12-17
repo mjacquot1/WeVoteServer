@@ -87,6 +87,7 @@ class EmailCampaign(models.Model):
     is_for_politician = models.BooleanField(default=False)
     is_for_staff = models.BooleanField(default=False)
     is_for_voter = models.BooleanField(default=False)
+    scheduled_send_time = models.DateTimeField(null=True, blank=True)
     voter_we_vote_id = models.CharField(max_length=255, default=None, null=True, unique=False, db_index=True)
 
 
@@ -111,6 +112,7 @@ class EmailCampaignRecipient(models.Model):
     One recipient of a bulk email campaign
     """
     candidate_we_vote_id = models.CharField(max_length=255, default=None, null=True, unique=False, db_index=True)
+    email_address = models.TextField(null=True, blank=True)
     email_body_assembled = models.TextField(null=True, blank=True)
     email_campaign_id = models.PositiveIntegerField(default=0, null=False)
     email_scheduled = models.BooleanField(default=False)
